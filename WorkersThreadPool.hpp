@@ -1,68 +1,75 @@
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <system_error>
 #include <thread>
 
-#define THREAD_SPAWN_FAIL 2
+#define SYS_ERR -1
 #define OK 0
 
+namespace hhf112 {
 class WorkerThreadsPool {
  public:
   WorkerThreadsPool() = default;
   WorkerThreadsPool(const WorkerThreadsPool &workers) = delete;
   WorkerThreadsPool &operator=(const WorkerThreadsPool &workers) = delete;
 
-  inline int trySpawnThreads(unsigned int n = 1) {
+  inline int trySpawnThreads(unsigned int threads_cnt = 1) {
     kill_all_threads_ = false;
     try {
-      while (n--) {
+      while (threads_cnt-- > 0) {
         threads_vec_.emplace_back(std::thread([this]() -> void {
           active_thread_cnt_.fetch_add(1);
+          joinable_thread_cnt_.fetch_add(1);
+
           std::function<void()> task;
 
           while (true) {
-            std::unique_lock<std::mutex> take(task_queue_mutex_);
-            cv_.wait(take,
-                     [this]() { return kill_all_threads_ || !task_queue_.empty(); });
+            std::unique_lock<std::mutex> task_q_lock(task_q_mtx_);
+            cv_.wait(task_q_lock, [this]() {
+              return kill_all_threads_ || !task_q_.empty();
+            });
 
             if (kill_all_threads_) {
               active_thread_cnt_.fetch_sub(1);
               cv_.notify_all();
               return;
             } else {
-              task = std::move(task_queue_.front());
-              task_queue_.pop();
-              take.unlock();
+              task = std::move(task_q_.front());
+              task_q_.pop();
+              task_q_lock.unlock();
 
-              working_thread_cnt_.fetch_add(1);
+              working_threads_cnt_.fetch_add(1);
 
               task();
 
-              working_thread_cnt_.fetch_sub(1);
+              working_threads_cnt_.fetch_sub(1);
               cv_.notify_all();
             }
           }
         }));
       }
-
+      return OK;
     } catch (std::system_error &e) {
-      return THREAD_SPAWN_FAIL;
+      return SYS_ERR;
     }
-
-    return OK;
   }
 
   template <typename Functor, typename... Args>
   inline void pushTask(Functor &&fn, Args &&...args) {
-    std::lock_guard<std::mutex> guard(task_queue_mutex_);
+    {
+      std::lock_guard<std::mutex> task_q_lock(task_q_mtx_);
 
-    if constexpr (sizeof...(Args) != 0)
-      task_queue_.push(std::bind_front(std::forward(fn), std::forward(args)...));
-    else
-      task_queue_.push(fn);
+      if constexpr (sizeof...(Args) != 0)
+        task_q_.push(std::bind_front(std::forward<Functor>(fn),
+                                     std::forward<Args>(args)...));
+      else
+        task_q_.push(fn);
+    }
 
     cv_.notify_one();
   }
@@ -73,50 +80,89 @@ class WorkerThreadsPool {
     return obj;
   }
 
-  inline void enableKillAllThreads() {
-    std::lock_guard<std::mutex> take(task_queue_mutex_);
-    kill_all_threads_.store(true);
-    cv_.notify_all();
+  inline void forceClearQueue() {
+    std::lock_guard<std::mutex> take(task_q_mtx_);
+    while (!task_q_.empty()) task_q_.pop();
   }
 
   inline void waitForTasksComplete() {
-    std::unique_lock<std::mutex> take(task_queue_mutex_);
-    cv_.wait(take, [this]() { return working_thread_cnt_.load() == 0 && task_queue_.size() == 0; });
+    std::unique_lock<std::mutex> take(task_q_mtx_);
+    cv_.wait(take, [this]() {
+      return working_threads_cnt_ == 0 && task_q_.size() == 0;
+    });
   }
 
-  inline void forceClearQueue() {
-    std::lock_guard<std::mutex> take(task_queue_mutex_);
-    while (!task_queue_.empty()) task_queue_.pop();
-  }
+  inline int waitForTasksCompleteAndHarvestThreads() {
+    try {
+      std::unique_lock<std::mutex> task_q_lock(task_q_mtx_);
+      cv_.wait(task_q_lock, [this]() {
+        return working_threads_cnt_.load() == 0 && task_q_.size() == 0;
+      });
 
-  inline void waitForTasksCompleteAndHarvest() {
-    waitForTasksComplete();
-
-    {
-      std::lock_guard<std::mutex> take(task_queue_mutex_);
       kill_all_threads_.store(true);
       cv_.notify_all();
-    }
 
-    std::unique_lock<std::mutex> take(task_queue_mutex_);
-    cv_.wait(take, [this] { return active_thread_cnt_ == 0; });
-    for (auto &worker : threads_vec_) worker.join();
+      cv_.wait(task_q_lock, [this] { return active_thread_cnt_ == 0; });
+
+      for (auto &worker : threads_vec_) {
+        if (worker.joinable()) {
+          worker.join();
+          joinable_thread_cnt_.fetch_sub(1);
+        }
+      }
+
+      kill_all_threads_.store(false);
+      return OK;
+    } catch (std::system_error &e) {
+      return SYS_ERR;
+    }
   }
 
-  ~WorkerThreadsPool() { waitForTasksCompleteAndHarvest(); }
-  int32_t getWorkingThreadsCnt() { return working_thread_cnt_.load();}
-  int32_t getActiveThreadsCnt() { return active_thread_cnt_.load();}
-  int32_t getNumTasksRemaining() { 
-    std::lock_guard<std::mutex> take (task_queue_mutex_);
-    return task_queue_.size();
+  // inline int forceTerminateThreads() {
+  //   try {
+  //     std::unique_lock<std::mutex> task_q_lock(task_q_mtx_);
+  //
+  //     kill_all_threads_.store(true);
+  //     cv_.notify_all();
+  //
+  //     cv_.wait(task_q_lock, [this] { return active_thread_cnt_ == 0; });
+  //
+  //     for (auto &worker : threads_vec_) {
+  //       if (worker.joinable()) {
+  //         worker.join();
+  //         joinable_thread_cnt_.fetch_sub(1);
+  //       }
+  //     }
+  //
+  //     kill_all_threads_.store(false);
+  //     return OK;
+  //   } catch (std::system_error &e) {
+  //     return SYS_ERR;
+  //   }
+  // }
+  //
+  ~WorkerThreadsPool() { waitForTasksCompleteAndHarvestThreads(); }
+
+  int32_t getWorkingThreadsCnt() { return working_threads_cnt_.load(); }
+  int32_t getActiveThreadsCnt() { return active_thread_cnt_.load(); }
+  int32_t getJoinableThreadsCnt() { return joinable_thread_cnt_.load(); }
+  std::function<void()> popTaskQueue() {
+    std::lock_guard<std::mutex> guard(task_q_mtx_);
+    return task_q_.front();
+  }
+  int32_t getTaskQueueSize() {
+    std::lock_guard<std::mutex> take(task_q_mtx_);
+    return task_q_.size();
   }
 
  private:
-  std::mutex task_queue_mutex_;
+  std::mutex task_q_mtx_;
   std::condition_variable cv_;
-  std::queue<std::function<void()>> task_queue_;
+  std::queue<std::function<void()>> task_q_;
   std::vector<std::thread> threads_vec_;
   std::atomic<bool> kill_all_threads_ = false;
-  std::atomic<int32_t> working_thread_cnt_ = 0;
+  std::atomic<int32_t> working_threads_cnt_ = 0;
   std::atomic<int32_t> active_thread_cnt_ = 0;
+  std::atomic<int32_t> joinable_thread_cnt_ = 0;
 };
+}  // namespace hhf112
