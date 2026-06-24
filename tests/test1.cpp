@@ -3,11 +3,11 @@
 #include <chrono>
 #include <thread>
 
-#include "../WorkersThreadPool.hpp"
+#include "../BlockingThreadPool.hpp"
 
 class PoolTest : public testing::Test {
  protected:
-  hhf112::WorkerThreadsPool pool;
+  hhf112::BlockingThreadPool pool;
 
   void SetUp() override {
     for (int i{10}; i-- > 0;) {

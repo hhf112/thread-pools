@@ -12,11 +12,11 @@
 #define OK 0
 
 namespace hhf112 {
-class WorkerThreadsPool {
+class BlockingThreadPool {
  public:
-  WorkerThreadsPool() = default;
-  WorkerThreadsPool(const WorkerThreadsPool &workers) = delete;
-  WorkerThreadsPool &operator=(const WorkerThreadsPool &workers) = delete;
+  BlockingThreadPool() = default;
+  BlockingThreadPool(const BlockingThreadPool &workers) = delete;
+  BlockingThreadPool &operator=(const BlockingThreadPool &workers) = delete;
 
   inline int trySpawnThreads(unsigned int threads_cnt = 1) {
     kill_all_threads_ = false;
@@ -74,8 +74,8 @@ class WorkerThreadsPool {
     cv_.notify_one();
   }
 
-  static inline std::shared_ptr<WorkerThreadsPool> makeSharedPtrTo(int n = 0) {
-    auto obj = std::make_shared<WorkerThreadsPool>();
+  static inline std::shared_ptr<BlockingThreadPool> makeSharedPtrTo(int n = 0) {
+    auto obj = std::make_shared<BlockingThreadPool>();
     if (obj->trySpawnThreads(n) != OK) return nullptr;
     return obj;
   }
@@ -141,7 +141,7 @@ class WorkerThreadsPool {
   //   }
   // }
   //
-  ~WorkerThreadsPool() { waitForTasksCompleteAndHarvestThreads(); }
+  ~BlockingThreadPool() { waitForTasksCompleteAndHarvestThreads(); }
 
   int32_t getWorkingThreadsCnt() { return working_threads_cnt_.load(); }
   int32_t getActiveThreadsCnt() { return active_thread_cnt_.load(); }
