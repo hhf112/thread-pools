@@ -2,15 +2,16 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <system_error>
 #include <thread>
-#include <iostream>
 
 #define SYS_ERR -1
 #define OK 0
+#define DEBUG(str) std::cerr << "[DEBUG] " << str;
 
 namespace hhf112 {
 class BlockingThreadPool {
@@ -84,6 +85,7 @@ class BlockingThreadPool {
   inline void forceClearQueue() {
     std::lock_guard<std::mutex> take(task_q_mtx_);
     while (!task_q_.empty()) task_q_.pop();
+    //DEBUG("forceClearQueue(): queue emptied\n")
   }
 
   inline void waitForTasksComplete() {
@@ -111,6 +113,8 @@ class BlockingThreadPool {
           joinable_thread_cnt_.fetch_sub(1);
         }
       }
+      threads_vec_.clear();
+      //DEBUG("forceterminateThreads(): threads harvested\n");
 
       kill_all_threads_.store(false);
       return OK;
@@ -127,27 +131,34 @@ class BlockingThreadPool {
       cv_.notify_all();
 
       cv_.wait(task_q_lock, [this] { return active_thread_cnt_ == 0; });
-      std::cerr << "thiswaitcompletes\n";
+      //DEBUG("forceterminateThreads(): wait completed, " << active_thread_cnt_ << " active threads.\n must join " << threads_vec_.size() << " threads.\n");
 
       for (auto &worker : threads_vec_) {
         if (worker.joinable()) {
+          //DEBUG("forceterminateThreads(): " << "joining a thread.\n");
+
           worker.join();
-          std::cerr << "thread joined.\n";
           joinable_thread_cnt_.fetch_sub(1);
-        }
+          //DEBUG("forceterminateThreads(): " << joinable_thread_cnt_ << " threads remaining to join.\n");
+        } // else
+          //DEBUG("forceterminateThreads(): " << "encountered an unjoinable thread.\n");
       }
+      threads_vec_.clear();
+      //DEBUG("forceterminateThreads(): threads harvested\n");
 
       kill_all_threads_.store(false);
-      std::cerr << "we are done here\n";
       return OK;
     } catch (std::system_error &e) {
       return SYS_ERR;
     }
   }
 
-  ~BlockingThreadPool() {  
+  ~BlockingThreadPool() {
+    //DEBUG("~BlockingThreadPool(): desstructor initiaited\n");
     forceTerminateThreads();
+    //DEBUG("~BlockingThreadPool(): threads harvested\n");
     forceClearQueue();
+    //DEBUG("~BlockingThreadPool(): task queue empty\n");
   }
 
   int32_t getWorkingThreadsCnt() { return working_threads_cnt_.load(); }
