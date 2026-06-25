@@ -7,6 +7,7 @@
 #include <queue>
 #include <system_error>
 #include <thread>
+#include <iostream>
 
 #define SYS_ERR -1
 #define OK 0
@@ -118,30 +119,36 @@ class BlockingThreadPool {
     }
   }
 
-  // inline int forceTerminateThreads() {
-  //   try {
-  //     std::unique_lock<std::mutex> task_q_lock(task_q_mtx_);
-  //
-  //     kill_all_threads_.store(true);
-  //     cv_.notify_all();
-  //
-  //     cv_.wait(task_q_lock, [this] { return active_thread_cnt_ == 0; });
-  //
-  //     for (auto &worker : threads_vec_) {
-  //       if (worker.joinable()) {
-  //         worker.join();
-  //         joinable_thread_cnt_.fetch_sub(1);
-  //       }
-  //     }
-  //
-  //     kill_all_threads_.store(false);
-  //     return OK;
-  //   } catch (std::system_error &e) {
-  //     return SYS_ERR;
-  //   }
-  // }
-  //
-  ~BlockingThreadPool() { waitForTasksCompleteAndHarvestThreads(); }
+  inline int forceTerminateThreads() {
+    try {
+      std::unique_lock<std::mutex> task_q_lock(task_q_mtx_);
+
+      kill_all_threads_.store(true);
+      cv_.notify_all();
+
+      cv_.wait(task_q_lock, [this] { return active_thread_cnt_ == 0; });
+      std::cerr << "thiswaitcompletes\n";
+
+      for (auto &worker : threads_vec_) {
+        if (worker.joinable()) {
+          worker.join();
+          std::cerr << "thread joined.\n";
+          joinable_thread_cnt_.fetch_sub(1);
+        }
+      }
+
+      kill_all_threads_.store(false);
+      std::cerr << "we are done here\n";
+      return OK;
+    } catch (std::system_error &e) {
+      return SYS_ERR;
+    }
+  }
+
+  ~BlockingThreadPool() {  
+    forceTerminateThreads();
+    forceClearQueue();
+  }
 
   int32_t getWorkingThreadsCnt() { return working_threads_cnt_.load(); }
   int32_t getActiveThreadsCnt() { return active_thread_cnt_.load(); }

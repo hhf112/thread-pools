@@ -16,14 +16,16 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 add_executable(
-  poolTest
-  tests/test1.cpp
+  poolTest.out
+  tests/poolTest.cpp
 )
 
 target_link_libraries(
-  poolTest
+  poolTest.out
   GTest::gtest_main
 )
 
 include(GoogleTest)
-gtest_discover_tests(poolTest)
+
+add_test(NAME poolTests COMMAND poolTest.out)
+set_tests_properties(poolTests PROPERTIES TIMEOUT 5)

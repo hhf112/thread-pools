@@ -53,11 +53,11 @@ TEST_F(PoolTest, forceClearQueue) {
   ASSERT_EQ(pool.getTaskQueueSize(), 0);
 }
 
-// TEST_F(PoolTest, forceTerminateThreads) {
-//   if (pool.trySpawnThreads(5) == -1) return;
-//
-//   ASSERT_EQ(pool.forceTerminateThreads(), OK);
-//
-//   ASSERT_EQ(pool.getActiveThreadsCnt(), 0);
-//   ASSERT_EQ(pool.getJoinableThreadsCnt(), 0);
-// }
+TEST_F(PoolTest, forceTerminateThreads) {
+  if (pool.trySpawnThreads(5) == -1) return;
+
+  ASSERT_EQ(pool.forceTerminateThreads(), OK);
+
+  ASSERT_EQ(pool.getActiveThreadsCnt(), 0);
+  ASSERT_EQ(pool.getJoinableThreadsCnt(), 0);
+}
